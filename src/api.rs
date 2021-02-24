@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -27,8 +27,9 @@ pub async fn post_crawl(mut req: Request<State>) -> tide::Result {
     let domain: Domain = req.body_json().await?;
     println!("Domain name: {:#?}", domain);
 
-    let key = format!("{:x}", md5::compute(domain.address.clone()));
-    let value = test_run(&domain.address).await;
+    let key = format!("{:?}", domain);
+    let key = format!("{:x}", md5::compute(key));
+    let value = test_run(&domain.address, domain.max_depth).await;
     let value = match value {
         Some(x) => x,
         None => return Ok("error".to_owned().into()),
@@ -70,27 +71,8 @@ pub async fn get_crawled_count(req: Request<State>) -> tide::Result {
     Ok("Failed".into())
 }
 
-async fn test_run(domain_address: &str) -> Option<Vec<String>> {
-    let mut visited = HashSet::new();
-    let mut not_visited: HashSet<String> = HashSet::new();
-
-    visited.insert(domain_address.to_owned());
-
-    let links;
-    {
-        let html = fetch_html_document(domain_address).await?;
-        links = scrap_links(domain_address, &html).unwrap();
-    }
-
-    for link in links.iter() {
-        if !visited.contains(link) && !not_visited.contains(link) {
-            not_visited.insert(link.to_owned());
-        }
-    }
-
-    let mut visited_state = VisitedState::new();
-    visited_state.visited = visited;
-    visited_state.not_visited = not_visited;
+async fn test_run(domain_address: &str, max_depth: Option<usize>) -> Option<Vec<String>> {
+    let visited_state = VisitedState::new(domain_address, max_depth);
 
     let visited_state = Arc::new(Mutex::new(visited_state));
     let active_workers = Arc::new(Mutex::new(0u16));
@@ -118,12 +100,12 @@ pub async fn test(
     active_workers: ThreadShared<u16>,
 ) {
     loop {
-        let abc;
+        let task;
         {
-            abc = visited_state.lock().unwrap().not_visited_last();
+            task = visited_state.lock().unwrap().not_visited_last();
         }
 
-        if abc.is_none() {
+        if task.is_none() {
             {
                 if *active_workers.lock().unwrap() == 0 {
                     return;
@@ -135,15 +117,17 @@ pub async fn test(
         } else {
             *active_workers.lock().unwrap() += 1;
         }
+        let task = task.unwrap();
 
-        let task = abc.unwrap();
+        let url = task.0.clone();
+        let depth = task.1.clone();
 
-        if let Some(html) = fetch_html_document(&task).await {
+        if let Some(html) = fetch_html_document(&url).await {
             let domain_address = domain_address.lock().unwrap().clone();
             let links = scrap_links(&domain_address, &html).unwrap();
 
             {
-                visited_state.lock().unwrap().add_urls(&links);
+                visited_state.lock().unwrap().add_urls(&links, depth);
             }
         }
 
@@ -196,33 +180,55 @@ pub fn normalize_url(domain_address: &str, url_source: &str) -> Option<String> {
 }
 
 pub struct VisitedState {
-    pub visited: HashSet<String>,
-    pub not_visited: HashSet<String>,
+    visited: HashSet<String>,
+    not_visited: HashMap<String, usize>,
+    max_depth: Option<usize>,
 }
 
 impl VisitedState {
-    pub fn new() -> Self {
+    pub fn new(base_url: &str, max_depth: Option<usize>) -> Self {
+        let mut not_visited = HashMap::new();
+        not_visited.insert(base_url.to_owned(), 0);
+
         Self {
             visited: HashSet::new(),
-            not_visited: HashSet::new(),
+            not_visited,
+            max_depth,
         }
     }
 
-    pub fn not_visited_last(&mut self) -> Option<String> {
-        if let Some(url) = self.not_visited.iter().next() {
-            let url = url.clone();
+    pub fn not_visited_last(&mut self) -> Option<(String, usize)> {
+        if let Some(visitation) = self.not_visited.iter().next() {
+            let url = visitation.0.clone();
+            let depth = visitation.1.clone();
+
             self.visited.insert(url.clone());
             self.not_visited.remove(&url);
-            return Some(url.clone());
+
+            return Some((url.clone(), depth));
         }
 
         None
     }
 
-    pub fn add_urls(&mut self, links: &[String]) {
+    pub fn add_urls(&mut self, links: &[String], depth: usize) {
+        let new_depth = depth + 1;
+
+        if let Some(max_depth) = self.max_depth {
+            if new_depth > max_depth {
+                return;
+            }
+        }
+
         for link in links.iter() {
-            if !self.visited.contains(link) && !self.not_visited.contains(link) {
-                self.not_visited.insert(link.to_owned());
+            if self.visited.contains(link) {
+                continue;
+            }
+
+            if let Some(entry_depth) = self.not_visited.get_mut(link) {
+                *entry_depth = (*entry_depth).min(new_depth);
+            } else {
+                self.not_visited.insert(link.to_owned(), new_depth);
             }
         }
     }
