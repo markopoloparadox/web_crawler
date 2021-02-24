@@ -2303,6 +2303,8 @@ version = "0.1.0"
 dependencies = [
  "async-std",
  "scraper",
+ "serde",
+ "serde_json",
  "surf",
  "tide",
  "url",
