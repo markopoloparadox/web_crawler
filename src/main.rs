@@ -5,10 +5,30 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use scraper::{Html, Selector};
+use tide::Request;
 use url::Url;
 
 #[async_std::main]
-async fn main() {
+async fn main() -> tide::Result<()> {
+    let mut app = tide::new();
+    app.at("/crawl").get(crawl);
+    app.at("/list_unique_url").get(list_unique_url);
+    app.at("/count_unique_url").get(count_unique_url);
+    app.listen("127.0.0.1:8080").await?;
+    Ok(())
+}
+
+async fn crawl(mut req: Request<()>) -> tide::Result {
+    Ok("Test".into())
+}
+async fn list_unique_url(mut req: Request<()>) -> tide::Result {
+    Ok("Test".into())
+}
+async fn count_unique_url(mut req: Request<()>) -> tide::Result {
+    Ok("Test".into())
+}
+
+async fn test_run() {
     // Fixed domain
     const DOMAIN_ADDRESS: &str = "https://www.foi.unizg.hr";
 
