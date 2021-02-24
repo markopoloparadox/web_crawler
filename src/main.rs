@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use http_req::response::StatusCode;
 use scraper::{Html, Selector};
 use url::Url;
@@ -11,14 +13,42 @@ use url::Url;
 
 fn main() {
     // Fixed domain
-    const DOMAIN_ADDRESS: &str = "https://www.foi.unizg.hr/en";
+    const DOMAIN_ADDRESS: &str = "https://www.foi.unizg.hr";
+
+    let mut visited = HashSet::new();
+    let mut not_visited: HashSet<String> = HashSet::new();
+
+    visited.insert(DOMAIN_ADDRESS.to_owned());
 
     let html = fetch_html_document(DOMAIN_ADDRESS).unwrap();
-    let mut links = scrap_links(DOMAIN_ADDRESS, &html).unwrap();
+    let links = scrap_links(DOMAIN_ADDRESS, &html).unwrap();
 
-    // Remove duplicates
-    links.sort();
-    links.dedup();
+    for link in links.iter() {
+        if !visited.contains(link) && !not_visited.contains(link) {
+            not_visited.insert(link.to_owned());
+        }
+    }
+
+    /*     println!("Visited: {:#?}", visited);
+    println!("Not Visited: {:#?}", not_visited); */
+
+    while let Some(url) = not_visited.iter().next() {
+        println!("Url: {}", url);
+        let url = url.clone();
+
+        if let Some(html) = fetch_html_document(&url) {
+            let links = scrap_links(DOMAIN_ADDRESS, &html).unwrap();
+
+            for link in links.iter() {
+                if !visited.contains(link) && !not_visited.contains(link) {
+                    not_visited.insert(link.to_owned());
+                }
+            }
+        }
+
+        not_visited.remove(&url);
+        visited.insert(url);
+    }
 }
 
 pub fn fetch_html_document(url: &str) -> Option<Html> {
@@ -42,14 +72,11 @@ pub fn fetch_html_document(url: &str) -> Option<Html> {
 pub fn scrap_links(domain_address: &str, html: &Html) -> Option<Vec<String>> {
     let selector = Selector::parse("a[href]").ok()?;
 
-    let mut links = Vec::new();
     let elements = html.select(&selector);
-    for element in elements {
-        let url = element.value().attr("href")?;
-        if let Some(url) = normalize_url(domain_address, url) {
-            links.push(url);
-        }
-    }
+    let links: Vec<String> = elements
+        .filter_map(|x| x.value().attr("href"))
+        .filter_map(|x| normalize_url(domain_address, x))
+        .collect();
 
     Some(links)
 }
