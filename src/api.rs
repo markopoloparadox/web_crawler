@@ -25,7 +25,11 @@ pub async fn post_crawl(mut req: Request<State>) -> tide::Result {
     println!("Domain name: {}", domain.address);
 
     let key = format!("{:x}", md5::compute(domain.address.clone()));
-    let value = test_run(&domain.address).await.unwrap();
+    let value = test_run(&domain.address).await;
+    let value = match value {
+        Some(x) => x,
+        None => return Ok("error".to_owned().into()),
+    };
 
     let mut links = req.state().links.write().unwrap();
     links.insert(key.clone(), value);
@@ -37,7 +41,7 @@ pub async fn post_crawl(mut req: Request<State>) -> tide::Result {
     return Ok(res);
 }
 
-pub async fn get_crawled_list(mut req: Request<State>) -> tide::Result {
+pub async fn get_crawled_list(req: Request<State>) -> tide::Result {
     let crawls = req.state().links.read().unwrap();
     let id = req.param("id")?;
 
@@ -50,7 +54,7 @@ pub async fn get_crawled_list(mut req: Request<State>) -> tide::Result {
     Ok("Failed".into())
 }
 
-pub async fn get_crawled_count(mut req: Request<State>) -> tide::Result {
+pub async fn get_crawled_count(req: Request<State>) -> tide::Result {
     let crawls = req.state().links.read().unwrap();
     let id = req.param("id")?;
 
@@ -71,7 +75,7 @@ async fn test_run(domain_address: &str) -> Option<Vec<String>> {
 
     let links;
     {
-        let html = fetch_html_document(domain_address).await.unwrap();
+        let html = fetch_html_document(domain_address).await?;
         links = scrap_links(domain_address, &html).unwrap();
     }
 
@@ -83,14 +87,16 @@ async fn test_run(domain_address: &str) -> Option<Vec<String>> {
 
     let visited = Arc::new(Mutex::new(visited));
     let not_visited = Arc::new(Mutex::new(not_visited));
+    let active_workers = Arc::new(Mutex::new(0u16));
     let domain_address = Arc::new(Mutex::new(domain_address.to_owned()));
 
     let mut handles = Vec::new();
-    for _i in 0..100 {
+    for _i in 0..3 {
         handles.push(async_std::task::spawn(test(
             domain_address.clone(),
             visited.clone(),
             not_visited.clone(),
+            active_workers.clone(),
         )));
     }
 
@@ -105,10 +111,8 @@ pub async fn test(
     domain_address: Arc<Mutex<String>>,
     visited: Arc<Mutex<HashSet<String>>>,
     not_visited: Arc<Mutex<HashSet<String>>>,
+    active_workers: Arc<Mutex<u16>>,
 ) {
-    const MAX_SLEEP_COUNT: u32 = 5;
-
-    let mut sleep_count = 0;
     loop {
         let mut abc = None;
         {
@@ -125,21 +129,22 @@ pub async fn test(
         }
 
         if abc.is_none() {
-            if sleep_count >= MAX_SLEEP_COUNT {
-                return;
+            {
+                if *active_workers.lock().unwrap() == 0 {
+                    return;
+                }
             }
 
-            sleep_count += 1;
             async_std::task::sleep(Duration::from_millis(100)).await;
             continue;
+        } else {
+            *active_workers.lock().unwrap() += 1;
         }
 
         let task = abc.unwrap();
-        sleep_count = 0;
 
         if let Some(html) = fetch_html_document(&task).await {
             let domain_address = domain_address.lock().unwrap().clone();
-
             let links = scrap_links(&domain_address, &html).unwrap();
 
             {
@@ -153,6 +158,8 @@ pub async fn test(
                 }
             }
         }
+
+        *active_workers.lock().unwrap() -= 1;
     }
 }
 
