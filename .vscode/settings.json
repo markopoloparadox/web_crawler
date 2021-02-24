@@ -1,0 +1,51 @@
+{
+    "cSpell.words": [
+        "Cshop",
+        "Datelike",
+        "Ekupi",
+        "FUTURAIT",
+        "Futura",
+        "HGSPOT",
+        "Hardsoft",
+        "Informatika",
+        "MALLHR",
+        "MODULDEVET",
+        "Mikronis",
+        "PCSHOP",
+        "PROXIMAINFORMATIKA",
+        "Postgres",
+        "Protis",
+        "Ryzen",
+        "TEAMMEDIA",
+        "chartjs",
+        "chrono",
+        "deser",
+        "msrp",
+        "reqwest",
+        "rustbreak"
+    ],
+    "editor.semanticTokenColorCustomizations": {
+        "enabled": true,
+        "rules": {
+            "enumMember": "#00eeaa",
+            "enum": "#00AB88",
+            "member": "#FFFFFF",
+            "variable.declaration.mutable": {
+                "underline": false
+            },
+            "variable.mutable": {
+                "underline": false
+            },
+            "parameter.mutable": {
+                "underline": false
+            },
+            "selfKeyword": {
+                "underline": false
+            },
+            "function": {
+                "underline": false
+            }
+        },
+    },
+    "rust-analyzer.checkOnSave.allTargets": false,
+}
