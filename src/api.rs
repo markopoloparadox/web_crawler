@@ -4,8 +4,7 @@ use std::time::Duration;
 
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use tide::Body;
-use tide::{Request, Response};
+use tide::{Body, Request, Response};
 use url::Url;
 
 use crate::State;
@@ -14,6 +13,7 @@ use crate::State;
 struct Domain {
     address: String,
     max_depth: Option<usize>,
+    max_pages: Option<usize>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -29,7 +29,7 @@ pub async fn post_crawl(mut req: Request<State>) -> tide::Result {
 
     let key = format!("{:?}", domain);
     let key = format!("{:x}", md5::compute(key));
-    let value = test_run(&domain.address, domain.max_depth).await;
+    let value = test_run(&domain.address, domain.max_depth, domain.max_pages).await;
     let value = match value {
         Some(x) => x,
         None => return Ok("error".to_owned().into()),
@@ -71,8 +71,12 @@ pub async fn get_crawled_count(req: Request<State>) -> tide::Result {
     Ok("Failed".into())
 }
 
-async fn test_run(domain_address: &str, max_depth: Option<usize>) -> Option<Vec<String>> {
-    let visited_state = VisitedState::new(domain_address, max_depth);
+async fn test_run(
+    domain_address: &str,
+    max_depth: Option<usize>,
+    max_pages: Option<usize>,
+) -> Option<Vec<String>> {
+    let visited_state = VisitedState::new(domain_address, max_depth, max_pages);
 
     let visited_state = Arc::new(Mutex::new(visited_state));
     let active_workers = Arc::new(Mutex::new(0u16));
@@ -122,8 +126,22 @@ pub async fn test(
         let url = task.0.clone();
         let depth = task.1.clone();
 
-        if let Some(html) = fetch_html_document(&url).await {
+        if let Some(document) = fetch_html_document(&url).await {
             let domain_address = domain_address.lock().unwrap().clone();
+
+            let file_name: Vec<&str> = url.split(&domain_address).collect();
+            let file_content = document.clone();
+
+            let url = Url::parse(&domain_address).unwrap();
+            let domain_name = url.domain().unwrap();
+
+            let mut a: String = file_name[1].to_owned();
+            if a.starts_with('/') {
+                a = a[1..].to_owned();
+            }
+
+            save_to_file(domain_name, &a, &file_content).await;
+            let html = Html::parse_document(document.as_str());
             let links = scrap_links(&domain_address, &html).unwrap();
 
             {
@@ -135,7 +153,7 @@ pub async fn test(
     }
 }
 
-pub async fn fetch_html_document(url: &str) -> Option<Html> {
+pub async fn fetch_html_document(url: &str) -> Option<String> {
     let mut response = surf::get(url).await.ok()?;
 
     if response.status() != 200 {
@@ -148,7 +166,7 @@ pub async fn fetch_html_document(url: &str) -> Option<Html> {
     }
 
     let document = response.body_string().await.ok()?;
-    Some(Html::parse_document(document.as_str()))
+    Some(document)
 }
 
 pub fn scrap_links(domain_address: &str, html: &Html) -> Option<Vec<String>> {
@@ -183,10 +201,11 @@ pub struct VisitedState {
     visited: HashSet<String>,
     not_visited: HashMap<String, usize>,
     max_depth: Option<usize>,
+    max_pages: Option<usize>,
 }
 
 impl VisitedState {
-    pub fn new(base_url: &str, max_depth: Option<usize>) -> Self {
+    pub fn new(base_url: &str, max_depth: Option<usize>, max_pages: Option<usize>) -> Self {
         let mut not_visited = HashMap::new();
         not_visited.insert(base_url.to_owned(), 0);
 
@@ -194,10 +213,17 @@ impl VisitedState {
             visited: HashSet::new(),
             not_visited,
             max_depth,
+            max_pages,
         }
     }
 
     pub fn not_visited_last(&mut self) -> Option<(String, usize)> {
+        if let Some(max_pages) = self.max_pages {
+            if self.visited.len() >= max_pages {
+                return None;
+            }
+        }
+
         if let Some(visitation) = self.not_visited.iter().next() {
             let url = visitation.0.clone();
             let depth = visitation.1.clone();
@@ -232,4 +258,18 @@ impl VisitedState {
             }
         }
     }
+}
+
+pub async fn save_to_file(domain_name: &str, path: &str, contents: &str) -> Option<bool> {
+    async_std::fs::create_dir_all(format!("downloaded/{}/{}", domain_name, path))
+        .await
+        .ok()?;
+    async_std::fs::write(
+        format!("downloaded/{}/{}/index.html", domain_name, path),
+        contents,
+    )
+    .await
+    .ok()?;
+
+    Some(true)
 }
