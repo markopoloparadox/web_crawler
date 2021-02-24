@@ -1,15 +1,35 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+
+use async_std::sync::{Arc, Mutex};
+
+use crate::spider::ThreadShared;
 
 #[derive(Clone)]
 pub struct State {
-    pub links: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    pub database: ThreadShared<Database>,
 }
 
 impl State {
     pub fn new() -> Self {
         Self {
-            links: Arc::new(RwLock::new(HashMap::new())),
+            database: Arc::new(Mutex::new(Database::new())),
+        }
+    }
+}
+
+pub struct Database {
+    // HashMap<Spider_id, Vec<urls>>
+    pub domain_links: HashMap<String, Vec<String>>,
+
+    // HashMap<url, data>
+    pub crawled_urls: HashMap<String, String>,
+}
+
+impl Database {
+    pub fn new() -> Self {
+        Self {
+            crawled_urls: HashMap::new(),
+            domain_links: HashMap::new(),
         }
     }
 }
