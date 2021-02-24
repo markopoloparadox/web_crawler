@@ -10,9 +10,10 @@ use url::Url;
 
 use crate::State;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 struct Domain {
     address: String,
+    max_depth: Option<usize>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -20,9 +21,11 @@ struct PostCrawlAnswer {
     pub id: String,
 }
 
+type ThreadShared<T> = Arc<Mutex<T>>;
+
 pub async fn post_crawl(mut req: Request<State>) -> tide::Result {
     let domain: Domain = req.body_json().await?;
-    println!("Domain name: {}", domain.address);
+    println!("Domain name: {:#?}", domain);
 
     let key = format!("{:x}", md5::compute(domain.address.clone()));
     let value = test_run(&domain.address).await;
@@ -85,8 +88,11 @@ async fn test_run(domain_address: &str) -> Option<Vec<String>> {
         }
     }
 
-    let visited = Arc::new(Mutex::new(visited));
-    let not_visited = Arc::new(Mutex::new(not_visited));
+    let mut visited_state = VisitedState::new();
+    visited_state.visited = visited;
+    visited_state.not_visited = not_visited;
+
+    let visited_state = Arc::new(Mutex::new(visited_state));
     let active_workers = Arc::new(Mutex::new(0u16));
     let domain_address = Arc::new(Mutex::new(domain_address.to_owned()));
 
@@ -94,8 +100,7 @@ async fn test_run(domain_address: &str) -> Option<Vec<String>> {
     for _i in 0..3 {
         handles.push(async_std::task::spawn(test(
             domain_address.clone(),
-            visited.clone(),
-            not_visited.clone(),
+            visited_state.clone(),
             active_workers.clone(),
         )));
     }
@@ -103,29 +108,19 @@ async fn test_run(domain_address: &str) -> Option<Vec<String>> {
     for h in handles {
         h.await;
     }
-    let visited = visited.lock().unwrap();
-    Some(visited.iter().map(|x| x.clone()).collect())
+    let visited_state = visited_state.lock().unwrap();
+    Some(visited_state.visited.iter().map(|x| x.clone()).collect())
 }
 
 pub async fn test(
-    domain_address: Arc<Mutex<String>>,
-    visited: Arc<Mutex<HashSet<String>>>,
-    not_visited: Arc<Mutex<HashSet<String>>>,
-    active_workers: Arc<Mutex<u16>>,
+    domain_address: ThreadShared<String>,
+    visited_state: ThreadShared<VisitedState>,
+    active_workers: ThreadShared<u16>,
 ) {
     loop {
-        let mut abc = None;
+        let abc;
         {
-            let mut not_visited = not_visited.lock().unwrap();
-            let mut visited = visited.lock().unwrap();
-
-            if let Some(url) = not_visited.iter().next() {
-                let url = url.to_owned();
-                abc = Some(url.clone());
-
-                not_visited.remove(&url);
-                visited.insert(url.clone());
-            }
+            abc = visited_state.lock().unwrap().not_visited_last();
         }
 
         if abc.is_none() {
@@ -148,14 +143,7 @@ pub async fn test(
             let links = scrap_links(&domain_address, &html).unwrap();
 
             {
-                let mut not_visited = not_visited.lock().unwrap();
-                let visited = visited.lock().unwrap();
-
-                for link in links.iter() {
-                    if !visited.contains(link) && !not_visited.contains(link) {
-                        not_visited.insert(link.to_owned());
-                    }
-                }
+                visited_state.lock().unwrap().add_urls(&links);
             }
         }
 
@@ -205,4 +193,37 @@ pub fn normalize_url(domain_address: &str, url_source: &str) -> Option<String> {
     }
 
     None
+}
+
+pub struct VisitedState {
+    pub visited: HashSet<String>,
+    pub not_visited: HashSet<String>,
+}
+
+impl VisitedState {
+    pub fn new() -> Self {
+        Self {
+            visited: HashSet::new(),
+            not_visited: HashSet::new(),
+        }
+    }
+
+    pub fn not_visited_last(&mut self) -> Option<String> {
+        if let Some(url) = self.not_visited.iter().next() {
+            let url = url.clone();
+            self.visited.insert(url.clone());
+            self.not_visited.remove(&url);
+            return Some(url.clone());
+        }
+
+        None
+    }
+
+    pub fn add_urls(&mut self, links: &[String]) {
+        for link in links.iter() {
+            if !self.visited.contains(link) && !self.not_visited.contains(link) {
+                self.not_visited.insert(link.to_owned());
+            }
+        }
+    }
 }
