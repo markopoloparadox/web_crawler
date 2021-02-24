@@ -3,17 +3,28 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use scraper::{Html, Selector};
+use serde::{Deserialize, Serialize};
 use tide::Body;
 use tide::{Request, Response};
 use url::Url;
 
 use crate::State;
 
-pub async fn get_crawl(mut req: Request<State>) -> tide::Result {
+#[derive(Deserialize, Serialize)]
+struct Domain {
+    address: String,
+}
+
+pub async fn post_crawl(mut req: Request<State>) -> tide::Result {
+    let domain: Domain = req.body_json().await?;
+    println!("Domain name: {}", domain.address);
+
+    test_run(&domain.address).await;
+
     Ok("Test".into())
 }
 
-pub async fn list_unique_url(mut req: Request<State>) -> tide::Result {
+pub async fn get_crawled_list(mut req: Request<State>) -> tide::Result {
     let crawls = req.state().links.read().unwrap();
     let id = req.param("id")?;
 
@@ -26,7 +37,7 @@ pub async fn list_unique_url(mut req: Request<State>) -> tide::Result {
     Ok("Failed".into())
 }
 
-pub async fn count_unique_url(mut req: Request<State>) -> tide::Result {
+pub async fn get_crawled_count(mut req: Request<State>) -> tide::Result {
     let crawls = req.state().links.read().unwrap();
     let id = req.param("id")?;
 
@@ -39,17 +50,17 @@ pub async fn count_unique_url(mut req: Request<State>) -> tide::Result {
     Ok("Failed".into())
 }
 
-async fn test_run() {
-    // Fixed domain
-    const DOMAIN_ADDRESS: &str = "https://www.foi.unizg.hr";
-
+async fn test_run(domain_address: &str) {
     let mut visited = HashSet::new();
     let mut not_visited: HashSet<String> = HashSet::new();
 
-    visited.insert(DOMAIN_ADDRESS.to_owned());
+    visited.insert(domain_address.to_owned());
 
-    let html = fetch_html_document(DOMAIN_ADDRESS).await.unwrap();
-    let links = scrap_links(DOMAIN_ADDRESS, &html).unwrap();
+    let links;
+    {
+        let html = fetch_html_document(domain_address).await.unwrap();
+        links = scrap_links(domain_address, &html).unwrap();
+    }
 
     for link in links.iter() {
         if !visited.contains(link) && !not_visited.contains(link) {
@@ -59,10 +70,12 @@ async fn test_run() {
 
     let visited = Arc::new(Mutex::new(visited));
     let not_visited = Arc::new(Mutex::new(not_visited));
+    let domain_address = Arc::new(Mutex::new(domain_address.to_owned()));
 
     let mut handles = Vec::new();
     for _i in 0..100 {
         handles.push(async_std::task::spawn(test(
+            domain_address.clone(),
             visited.clone(),
             not_visited.clone(),
         )));
@@ -71,11 +84,16 @@ async fn test_run() {
     for h in handles {
         h.await;
     }
+
+    println!("Visited: {:#?}", visited);
 }
 
-pub async fn test(visited: Arc<Mutex<HashSet<String>>>, not_visited: Arc<Mutex<HashSet<String>>>) {
-    const DOMAIN_ADDRESS: &str = "https://www.foi.unizg.hr";
-    const MAX_SLEEP_COUNT: u32 = 50;
+pub async fn test(
+    domain_address: Arc<Mutex<String>>,
+    visited: Arc<Mutex<HashSet<String>>>,
+    not_visited: Arc<Mutex<HashSet<String>>>,
+) {
+    const MAX_SLEEP_COUNT: u32 = 5;
 
     let mut sleep_count = 0;
     loop {
@@ -107,7 +125,9 @@ pub async fn test(visited: Arc<Mutex<HashSet<String>>>, not_visited: Arc<Mutex<H
         sleep_count = 0;
 
         if let Some(html) = fetch_html_document(&task).await {
-            let links = scrap_links(DOMAIN_ADDRESS, &html).unwrap();
+            let domain_address = domain_address.lock().unwrap().clone();
+
+            let links = scrap_links(&domain_address, &html).unwrap();
 
             {
                 let mut not_visited = not_visited.lock().unwrap();

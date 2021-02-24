@@ -2302,6 +2302,7 @@ name = "web_crawler"
 version = "0.1.0"
 dependencies = [
  "async-std",
+ "http-types",
  "scraper",
  "serde",
  "serde_json",
