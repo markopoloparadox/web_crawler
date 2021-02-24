@@ -15,13 +15,26 @@ struct Domain {
     address: String,
 }
 
+#[derive(Deserialize, Serialize)]
+struct PostCrawlAnswer {
+    pub id: String,
+}
+
 pub async fn post_crawl(mut req: Request<State>) -> tide::Result {
     let domain: Domain = req.body_json().await?;
     println!("Domain name: {}", domain.address);
 
-    test_run(&domain.address).await;
+    let key = format!("{:x}", md5::compute(domain.address.clone()));
+    let value = test_run(&domain.address).await.unwrap();
 
-    Ok("Test".into())
+    let mut links = req.state().links.write().unwrap();
+    links.insert(key.clone(), value);
+
+    // Return
+    let body = PostCrawlAnswer { id: key };
+    let mut res = Response::new(201);
+    res.set_body(Body::from_json(&body)?);
+    return Ok(res);
 }
 
 pub async fn get_crawled_list(mut req: Request<State>) -> tide::Result {
@@ -50,7 +63,7 @@ pub async fn get_crawled_count(mut req: Request<State>) -> tide::Result {
     Ok("Failed".into())
 }
 
-async fn test_run(domain_address: &str) {
+async fn test_run(domain_address: &str) -> Option<Vec<String>> {
     let mut visited = HashSet::new();
     let mut not_visited: HashSet<String> = HashSet::new();
 
@@ -84,8 +97,8 @@ async fn test_run(domain_address: &str) {
     for h in handles {
         h.await;
     }
-
-    println!("Visited: {:#?}", visited);
+    let visited = visited.lock().unwrap();
+    Some(visited.iter().map(|x| x.clone()).collect())
 }
 
 pub async fn test(
