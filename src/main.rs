@@ -1,5 +1,7 @@
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
+use easy_parallel::Parallel;
 use http_req::response::StatusCode;
 use scraper::{Html, Selector};
 use url::Url;
@@ -13,7 +15,7 @@ use url::Url;
 
 fn main() {
     // Fixed domain
-    const DOMAIN_ADDRESS: &str = "https://www.foi.unizg.hr";
+    const DOMAIN_ADDRESS: &str = "http://www.zadruga-podolski.hr";
 
     let mut visited = HashSet::new();
     let mut not_visited: HashSet<String> = HashSet::new();
@@ -29,26 +31,43 @@ fn main() {
         }
     }
 
-    /*     println!("Visited: {:#?}", visited);
-    println!("Not Visited: {:#?}", not_visited); */
+    let visited = Arc::new(Mutex::new(visited));
+    let not_visited = Arc::new(Mutex::new(not_visited));
 
-    while let Some(url) = not_visited.iter().next() {
-        println!("Url: {}", url);
-        let url = url.clone();
+    Parallel::new()
+        .each(0..50, |_i| loop {
+            let task;
+            {
+                let mut not_visited = not_visited.lock().unwrap();
+                let mut visited = visited.lock().unwrap();
 
-        if let Some(html) = fetch_html_document(&url) {
-            let links = scrap_links(DOMAIN_ADDRESS, &html).unwrap();
-
-            for link in links.iter() {
-                if !visited.contains(link) && !not_visited.contains(link) {
-                    not_visited.insert(link.to_owned());
+                if let Some(url) = not_visited.iter().next() {
+                    task = url.clone();
+                    not_visited.remove(&task);
+                    visited.insert(task.clone());
+                } else {
+                    return;
                 }
             }
-        }
 
-        not_visited.remove(&url);
-        visited.insert(url);
-    }
+            println!("Url: {}", task);
+
+            if let Some(html) = fetch_html_document(&task) {
+                let links = scrap_links(DOMAIN_ADDRESS, &html).unwrap();
+
+                {
+                    let mut not_visited = not_visited.lock().unwrap();
+                    let visited = visited.lock().unwrap();
+
+                    for link in links.iter() {
+                        if !visited.contains(link) && !not_visited.contains(link) {
+                            not_visited.insert(link.to_owned());
+                        }
+                    }
+                }
+            }
+        })
+        .run();
 }
 
 pub fn fetch_html_document(url: &str) -> Option<Html> {
@@ -90,6 +109,8 @@ pub fn normalize_url(domain_address: &str, url_source: &str) -> Option<String> {
         }
     } else if url_source.starts_with('/') {
         return Some(domain_address.to_owned() + url_source);
+    } else if url_source.ends_with(".html") {
+        return Some(domain_address.to_owned() + "/" + url_source);
     }
 
     None
