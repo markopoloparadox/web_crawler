@@ -1,28 +1,23 @@
+#![feature(proc_macro_hygiene, decl_macro)]
+
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use easy_parallel::Parallel;
-use http_req::response::StatusCode;
 use scraper::{Html, Selector};
 use url::Url;
 
-/*
-    What to do: Implement web crawler that finds all links inside a specific domain
-    How to do it: Make it simple and understandable
-    How to improve this program:
-        - Write it so it is multi-threaded/concurrent (async)
-*/
-
-fn main() {
+#[async_std::main]
+async fn main() {
     // Fixed domain
-    const DOMAIN_ADDRESS: &str = "http://www.zadruga-podolski.hr";
+    const DOMAIN_ADDRESS: &str = "https://www.foi.unizg.hr";
 
     let mut visited = HashSet::new();
     let mut not_visited: HashSet<String> = HashSet::new();
 
     visited.insert(DOMAIN_ADDRESS.to_owned());
 
-    let html = fetch_html_document(DOMAIN_ADDRESS).unwrap();
+    let html = fetch_html_document(DOMAIN_ADDRESS).await.unwrap();
     let links = scrap_links(DOMAIN_ADDRESS, &html).unwrap();
 
     for link in links.iter() {
@@ -34,57 +29,82 @@ fn main() {
     let visited = Arc::new(Mutex::new(visited));
     let not_visited = Arc::new(Mutex::new(not_visited));
 
-    Parallel::new()
-        .each(0..50, |_i| loop {
-            let task;
-            {
-                let mut not_visited = not_visited.lock().unwrap();
-                let mut visited = visited.lock().unwrap();
+    let mut handles = Vec::new();
+    for _i in 0..100 {
+        handles.push(async_std::task::spawn(test(
+            visited.clone(),
+            not_visited.clone(),
+        )));
+    }
 
-                if let Some(url) = not_visited.iter().next() {
-                    task = url.clone();
-                    not_visited.remove(&task);
-                    visited.insert(task.clone());
-                } else {
-                    return;
-                }
+    for h in handles {
+        h.await;
+    }
+}
+
+pub async fn test(visited: Arc<Mutex<HashSet<String>>>, not_visited: Arc<Mutex<HashSet<String>>>) {
+    const DOMAIN_ADDRESS: &str = "https://www.foi.unizg.hr";
+    const MAX_SLEEP_COUNT: u32 = 50;
+
+    let mut sleep_count = 0;
+    loop {
+        let mut abc = None;
+        {
+            let mut not_visited = not_visited.lock().unwrap();
+            let mut visited = visited.lock().unwrap();
+
+            if let Some(url) = not_visited.iter().next() {
+                let url = url.to_owned();
+                abc = Some(url.clone());
+
+                not_visited.remove(&url);
+                visited.insert(url.clone());
+            }
+        }
+
+        if abc.is_none() {
+            if sleep_count >= MAX_SLEEP_COUNT {
+                return;
             }
 
-            println!("Url: {}", task);
+            sleep_count += 1;
+            async_std::task::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
 
-            if let Some(html) = fetch_html_document(&task) {
-                let links = scrap_links(DOMAIN_ADDRESS, &html).unwrap();
+        let task = abc.unwrap();
+        sleep_count = 0;
 
-                {
-                    let mut not_visited = not_visited.lock().unwrap();
-                    let visited = visited.lock().unwrap();
+        if let Some(html) = fetch_html_document(&task).await {
+            let links = scrap_links(DOMAIN_ADDRESS, &html).unwrap();
 
-                    for link in links.iter() {
-                        if !visited.contains(link) && !not_visited.contains(link) {
-                            not_visited.insert(link.to_owned());
-                        }
+            {
+                let mut not_visited = not_visited.lock().unwrap();
+                let visited = visited.lock().unwrap();
+
+                for link in links.iter() {
+                    if !visited.contains(link) && !not_visited.contains(link) {
+                        not_visited.insert(link.to_owned());
                     }
                 }
             }
-        })
-        .run();
+        }
+    }
 }
 
-pub fn fetch_html_document(url: &str) -> Option<Html> {
-    let mut response_body = Vec::new();
-    let response = http_req::request::get(url, &mut response_body).ok()?;
+pub async fn fetch_html_document(url: &str) -> Option<Html> {
+    let mut response = surf::get(url).await.ok()?;
 
-    if response.status_code() != StatusCode::new(200) {
-        let code = response.status_code();
-        let reason = response.reason();
+    if response.status() != 200 {
         println!(
-            "Unable to fetch url: {}. Status code: {} {}",
-            url, code, reason
+            "Unable to fetch url: {}  Status code: {}",
+            url,
+            response.status()
         );
         return None;
     }
 
-    let document = String::from_utf8(response_body).ok()?;
+    let document = response.body_string().await.ok()?;
     Some(Html::parse_document(document.as_str()))
 }
 
