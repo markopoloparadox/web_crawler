@@ -1,6 +1,7 @@
 use crate::spider::{Spider, SpiderOptions};
 use crate::State;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tide::{Body, Request, Response};
 
 pub async fn post_spider(mut req: Request<State>) -> tide::Result {
@@ -74,7 +75,7 @@ pub async fn get_spider_count(req: Request<State>) -> tide::Result {
     // Retrieve count
     let database = req.state().database.lock().await;
     let (status_code, body) = match database.domain_links.get(id) {
-        Some(x) => (200, Body::from_json(&x.len().to_string())?),
+        Some(x) => (200, Body::from_json(&json!({"count": x.len()}))?),
         None => (400, Body::from_json(&"Unknown id".to_owned())?),
     };
 
