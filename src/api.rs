@@ -9,8 +9,8 @@ struct PostCrawlAnswer {
 }
 
 pub async fn post_spider(mut req: Request<State>) -> tide::Result {
-    let domain: Input = req.body_json().await?;
-    let hash = domain.generate_hash();
+    let input: Input = req.body_json().await?;
+    let hash = input.generate_hash();
 
     // Create successful response object
     let body = PostCrawlAnswer { id: hash.clone() };
@@ -25,9 +25,12 @@ pub async fn post_spider(mut req: Request<State>) -> tide::Result {
         }
     }
 
-    let options = SpiderOptions::new(domain.max_depth, domain.max_pages, false, false);
+    let robots_txt = input.robots_txt.unwrap_or(false);
+    let archive_pages = input.archive_pages.unwrap_or(false);
+
+    let options = SpiderOptions::new(input.max_depth, input.max_pages, robots_txt, archive_pages);
     let database = req.state().database.clone();
-    let value = Spider::run(&domain.address, options, database).await;
+    let value = Spider::run(input.address, options, database).await;
 
     let value = match value {
         Some(x) => x,
@@ -78,8 +81,8 @@ struct Input {
     address: String,
     max_depth: Option<usize>,
     max_pages: Option<usize>,
-    robots_txt: bool,
-    archive_pages: bool,
+    robots_txt: Option<bool>,
+    archive_pages: Option<bool>,
 }
 
 impl Input {

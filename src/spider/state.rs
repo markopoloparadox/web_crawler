@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use super::SpiderOptions;
 
 pub struct SpiderState {
-    pub domain_address: String,
+    pub base_url: String,
     pub visited: HashSet<String>,
     pub not_visited: HashMap<String, usize>,
     pub options: SpiderOptions,
@@ -11,12 +11,12 @@ pub struct SpiderState {
 }
 
 impl SpiderState {
-    pub fn new(base_url: &str, options: SpiderOptions) -> Self {
+    pub fn new(base_url: String, options: SpiderOptions) -> Self {
         let mut not_visited = HashMap::new();
         not_visited.insert(base_url.to_owned(), 0);
 
         Self {
-            domain_address: base_url.to_owned(),
+            base_url,
             visited: HashSet::new(),
             not_visited,
             options,

@@ -33,15 +33,15 @@ impl SpiderOptions {
 pub struct Spider;
 impl Spider {
     pub async fn run(
-        domain_address: &str,
+        base_url: String,
         options: SpiderOptions,
         database: ThreadShared<Database>,
     ) -> Option<Vec<String>> {
-        let state = SpiderState::new(domain_address, options);
+        let state = SpiderState::new(base_url, options);
         let state = Arc::new(Mutex::new(state));
 
         let mut handles = Vec::new();
-        for _i in 0..3 {
+        for _i in 0..10 {
             handles.push(async_std::task::spawn(task(
                 state.clone(),
                 database.clone(),
@@ -57,32 +57,29 @@ impl Spider {
 }
 
 pub async fn task(state: ThreadShared<SpiderState>, database: ThreadShared<Database>) {
-    let domain_address;
+    let base_url;
     let archive_pages;
     {
         let state = state.lock().await;
-        domain_address = state.domain_address.clone();
+        base_url = state.base_url.clone();
         archive_pages = state.options.archive_pages;
     }
 
     loop {
         let task;
-        let active_workers;
         {
             let mut state = state.lock().await;
             task = state.task();
-            active_workers = state.active_workers.clone();
+            if task.is_some() {
+                state.active_workers += 1;
+            } else if state.active_workers == 0 {
+                return;
+            }
         }
 
         if task.is_none() {
-            if active_workers == 0 {
-                return;
-            }
-
             async_std::task::sleep(Duration::from_millis(100)).await;
             continue;
-        } else {
-            state.lock().await.active_workers += 1;
         }
 
         let SpiderTask { url, depth } = task.unwrap();
@@ -106,13 +103,13 @@ pub async fn task(state: ThreadShared<SpiderState>, database: ThreadShared<Datab
             }
 
             if archive_pages {
-                save_to_file(&domain_address, &url, &document).await;
+                save_to_file(&base_url, &url, &document).await;
             }
 
             let links;
             {
                 let html = Html::parse_document(document.as_str());
-                links = scrap_links(&domain_address, &html).unwrap();
+                links = scrap_links(&base_url, &html);
             }
 
             {
@@ -121,7 +118,7 @@ pub async fn task(state: ThreadShared<SpiderState>, database: ThreadShared<Datab
         }
 
         {
-            state.lock().await.active_workers += 1;
+            state.lock().await.active_workers -= 1;
         }
     }
 }
@@ -142,42 +139,41 @@ pub async fn fetch_html_document(url: &str) -> Option<String> {
     Some(document)
 }
 
-pub fn scrap_links(domain_address: &str, html: &Html) -> Option<Vec<String>> {
-    let selector = Selector::parse("a[href]").ok()?;
+pub fn scrap_links(base_url: &str, html: &Html) -> Vec<String> {
+    let selector = match Selector::parse("a[href]") {
+        Ok(x) => x,
+        Err(_) => return vec![],
+    };
 
     let elements = html.select(&selector);
     let links: Vec<String> = elements
         .filter_map(|x| x.value().attr("href"))
-        .filter_map(|x| normalize_url(domain_address, x))
+        .filter_map(|x| normalize_url(base_url, x))
         .collect();
 
-    Some(links)
+    links
 }
 
-pub fn normalize_url(domain_address: &str, url_source: &str) -> Option<String> {
-    let url = Url::parse(url_source);
-
-    if let Ok(url) = url {
-        if url.has_host() && url.host_str().unwrap() == domain_address {
-            return Some(url.to_string());
-        }
-    } else if url_source.starts_with('/') {
-        return Some(domain_address.to_owned() + url_source);
-    } else if url_source.ends_with(".html") {
-        return Some(domain_address.to_owned() + "/" + url_source);
+pub fn normalize_url(base_url: &str, url: &str) -> Option<String> {
+    if url.starts_with(base_url) {
+        return Some(url.to_owned());
+    } else if url.starts_with('/') {
+        return Some(base_url.to_owned() + url);
+    } else if url.ends_with(".html") {
+        return Some(base_url.to_owned() + "/" + url);
     }
 
     None
 }
 
-pub async fn save_to_file(domain_address: &str, url: &str, contents: &str) -> Option<bool> {
-    let file_name: Vec<&str> = url.split(&domain_address).collect();
+pub async fn save_to_file(base_url: &str, url: &str, contents: &str) -> Option<bool> {
+    let file_name: Vec<&str> = url.split(&base_url).collect();
     let mut path: String = file_name[1].to_owned();
     if path.starts_with('/') {
         path = path[1..].to_owned();
     }
 
-    let url = Url::parse(&domain_address).unwrap();
+    let url = Url::parse(&base_url).unwrap();
     let domain_name = url.domain().unwrap();
 
     async_std::fs::create_dir_all(format!("downloaded/{}/{}", domain_name, path))
@@ -191,4 +187,113 @@ pub async fn save_to_file(domain_address: &str, url: &str, contents: &str) -> Op
     .ok()?;
 
     Some(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fetch_html_document_ok() {
+        const SOURCE: &str = r#"<style type="text/css">
+        h1 {
+            text-align: center;
+            font-size: 120px;
+            font-family: Helvetica, Verdana, Arial;
+        }
+        </style>
+        <h1>You spelled it wrong.</h1>"#;
+
+        let result = async_std::task::block_on(fetch_html_document("https://guthib.com/"));
+        assert!(result.is_some());
+
+        let actual = result.unwrap().replace(" ", "");
+        let actual = actual.replace("\n", "");
+        let expected = SOURCE.to_owned().replace(" ", "");
+        let expected = expected.replace("\n", "");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_fetch_html_document_bad() {
+        let result = async_std::task::block_on(fetch_html_document("https://guthibb.com/"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_normalize_url_case_full_path_ok() {
+        let base_url = "https://www.test.com";
+        let url = "https://www.test.com";
+
+        let result = normalize_url(base_url, url);
+        assert!(result.is_some());
+
+        let actual = result.unwrap();
+        let expected = url.to_owned();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_normalize_url_case_html_path_ok() {
+        let base_url = "https://www.test.com";
+        let url = "index.html";
+
+        let result = normalize_url(base_url, url);
+        assert!(result.is_some());
+
+        let actual = result.unwrap();
+        let expected = base_url.to_owned() + "/" + url;
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_normalize_url_case_part_path_ok() {
+        let base_url = "https://www.test.com";
+        let url = "/route";
+
+        let result = normalize_url(base_url, url);
+        assert!(result.is_some());
+
+        let actual = result.unwrap();
+        let expected = base_url.to_owned() + url;
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_normalize_url_case_1_bad() {
+        let base_url = "https://www.test.com";
+        let url = "route";
+
+        let result = normalize_url(base_url, url);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_scrap_links_case_two_links_ok() {
+        const SOURCE: &str = r#"
+        <a href="/Test1"></a>
+        <a href="/Test2"></a>"#;
+
+        let base_url = "https://www.test.com";
+        let html = Html::parse_document(SOURCE);
+
+        let links = scrap_links(base_url, &html);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0], base_url.to_owned() + "/Test1");
+        assert_eq!(links[1], base_url.to_owned() + "/Test2");
+    }
+
+    #[test]
+    fn test_scrap_links_case_zero_links_ok() {
+        const SOURCE: &str = r#"
+        <a></a>
+        <h1>You spelled it wrong.</h1>""#;
+
+        let base_url = "https://www.test.com";
+        let html = Html::parse_document(SOURCE);
+
+        let links = scrap_links(base_url, &html);
+        assert_eq!(links.len(), 0);
+    }
 }
