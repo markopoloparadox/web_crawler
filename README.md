@@ -118,3 +118,8 @@ $ curl localhost:8080/spider/e0436759bf33e12eb53ae0b97f790991/count
 
 # Final comments
 In order to keep this project simple and small, certain features were intentionally unimplemented like checking for the "robots.txt" file or checking the header for the `<base>` tag. Fell free to implement those features by yourself as a kind of exercise. Also, this project heavily relies on async code so anyone who is a async-first-timer should definitely check out this two videos [video1](https://www.youtube.com/watch?v=lJ3NC-R3gSI) [video2](https://www.youtube.com/watch?v=NNwK5ZPAJCk)
+
+# TODO
+- Add more tests (and rename current ones)
+- Fix bugs (spider returning a single link for nonexisting domains)
+- Benchmark solution

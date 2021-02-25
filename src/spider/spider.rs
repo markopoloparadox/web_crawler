@@ -212,7 +212,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_fetch_html_document_ok() {
+    fn test_fetch_document_ok() {
         const SOURCE: &str = r#"<style type="text/css">
         h1 {
             text-align: center;
@@ -222,7 +222,7 @@ mod tests {
         </style>
         <h1>You spelled it wrong.</h1>"#;
 
-        let result = async_std::task::block_on(fetch_html_document("https://guthib.com/"));
+        let result = async_std::task::block_on(fetch_document("https://guthib.com/"));
         assert!(result.is_some());
 
         let actual = result.unwrap().replace(" ", "");
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_fetch_html_document_bad() {
-        let result = async_std::task::block_on(fetch_html_document("https://guthibb.com/"));
+        let result = async_std::task::block_on(fetch_document("https://guthibb.com/"));
         assert!(result.is_none());
     }
 
@@ -313,5 +313,47 @@ mod tests {
 
         let links = scrap_links(base_url, &html);
         assert_eq!(links.len(), 0);
+    }
+
+    #[test]
+    fn spider_run_case_1_ok() {
+        let base_url = "http://www.zadruga-podolski.hr".to_owned();
+        let options = SpiderOptions::new(None, None, false, false);
+        let database = Arc::new(Mutex::new(Database::new()));
+
+        let links = async_std::task::block_on(Spider::run(base_url, options, database));
+        assert_eq!(links.len(), 13);
+    }
+
+    #[test]
+    fn spider_run_case_max_depth_ok() {
+        let base_url = "http://www.zadruga-podolski.hr".to_owned();
+        let options = SpiderOptions::new(Some(0), None, false, false);
+        let database = Arc::new(Mutex::new(Database::new()));
+
+        let links = async_std::task::block_on(Spider::run(base_url, options, database));
+        assert_eq!(links.len(), 1);
+    }
+
+    #[test]
+    fn spider_run_case_max_pages_ok() {
+        const MAX_PAGES: usize = 3;
+
+        let base_url = "http://www.zadruga-podolski.hr".to_owned();
+        let options = SpiderOptions::new(None, Some(MAX_PAGES), false, false);
+        let database = Arc::new(Mutex::new(Database::new()));
+
+        let links = async_std::task::block_on(Spider::run(base_url, options, database));
+        assert_eq!(links.len(), MAX_PAGES);
+    }
+
+    #[test]
+    fn spider_run_case_unknown_domain_ok() {
+        let base_url = "http://www.zadruga-tafatefe2.hr".to_owned();
+        let options = SpiderOptions::new(None, None, false, false);
+        let database = Arc::new(Mutex::new(Database::new()));
+
+        let links = async_std::task::block_on(Spider::run(base_url, options, database));
+        assert_eq!(links.len(), 1);
     }
 }
