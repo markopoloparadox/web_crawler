@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-
-use async_std::sync::{Arc, Mutex};
-
 use crate::spider::ThreadShared;
+use async_std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct State {

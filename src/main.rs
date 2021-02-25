@@ -10,7 +10,6 @@ mod state;
 */
 
 use api::{get_spider_count, get_spider_list, post_spider};
-use spider::Spider;
 use state::State;
 
 #[async_std::main]
