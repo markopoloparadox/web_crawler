@@ -44,7 +44,7 @@ impl SpiderState {
         None
     }
 
-    pub fn add_urls(&mut self, links: &[String], depth: usize) {
+    pub fn add_links(&mut self, links: &[String], depth: usize) {
         let new_depth = depth + 1;
 
         if let Some(max_depth) = self.options.max_depth {

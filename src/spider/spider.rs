@@ -1,11 +1,10 @@
 use super::state::{SpiderState, SpiderTask};
+use crate::common::ThreadShared;
 use crate::state::Database;
 use async_std::sync::{Arc, Mutex};
 use http_types::Url;
 use scraper::{Html, Selector};
 use std::time::Duration;
-
-pub type ThreadShared<T> = Arc<Mutex<T>>;
 
 pub struct SpiderOptions {
     pub max_depth: Option<usize>,
@@ -36,27 +35,37 @@ impl Spider {
         base_url: String,
         options: SpiderOptions,
         database: ThreadShared<Database>,
-    ) -> Option<Vec<String>> {
+    ) -> Vec<String> {
+        // Create a task-shared state
         let state = SpiderState::new(base_url, options);
         let state = Arc::new(Mutex::new(state));
 
-        let mut handles = Vec::new();
-        for _i in 0..10 {
-            handles.push(async_std::task::spawn(task(
+        let mut tasks = Vec::new();
+
+        // TODO: Make the number of running tasks to be settable
+        // by a Input parameter
+        for _i in 0..12 {
+            tasks.push(async_std::task::spawn(run_task(
                 state.clone(),
                 database.clone(),
             )));
         }
 
-        for h in handles {
+        // Wait for all the tasks finish
+        for h in tasks {
             h.await;
         }
+
+        // Retrieve the list of visited pages
         let state = state.lock().await;
-        Some(state.visited.iter().map(|x| x.clone()).collect())
+        state.visited.iter().map(|x| x.clone()).collect()
     }
 }
 
-pub async fn task(state: ThreadShared<SpiderState>, database: ThreadShared<Database>) {
+pub async fn run_task(state: ThreadShared<SpiderState>, database: ThreadShared<Database>) {
+    // Retrieve unchangeable data
+    // This also could have been done by passing those objects
+    // as parameters of this function
     let base_url;
     let archive_pages;
     {
@@ -68,6 +77,8 @@ pub async fn task(state: ThreadShared<SpiderState>, database: ThreadShared<Datab
     loop {
         let task;
         {
+            // The task is not done when there is still something to do
+            // or if there are still workers (other tasks) running
             let mut state = state.lock().await;
             task = state.task();
             if task.is_some() {
@@ -77,43 +88,51 @@ pub async fn task(state: ThreadShared<SpiderState>, database: ThreadShared<Datab
             }
         }
 
+        // If there is nothing to do then sleep for a while
         if task.is_none() {
             async_std::task::sleep(Duration::from_millis(100)).await;
             continue;
         }
-
         let SpiderTask { url, depth } = task.unwrap();
 
-        // Check if the document is already retrieved for requested url
         let mut document;
         {
+            // Get the html document from our database
             let database = database.lock().await;
             document = database.crawled_urls.get(&url).map(|x| x.clone());
-        }
 
-        // If is not inside the database, try to fetch it
-        if document.is_none() {
-            document = fetch_html_document(&url).await;
+            // If not found, try to fetch it
+            if document.is_none() {
+                document = fetch_document(&url).await;
+            }
         }
 
         if let Some(document) = document {
+            // Save the document so that next time when we need it we can
+            // can read it from our database
+            //
+            // For sake of simplicity there is no additional checks if the key
+            // already exists in the map
             {
                 let mut database = database.lock().await;
                 database.crawled_urls.insert(url.clone(), document.clone());
             }
 
+            // Archived (downloaded) pages will be stored in the "download" folder
             if archive_pages {
                 save_to_file(&base_url, &url, &document).await;
             }
 
             let links;
             {
+                // Scrap all the links found inside HTML object
                 let html = Html::parse_document(document.as_str());
                 links = scrap_links(&base_url, &html);
             }
 
             {
-                state.lock().await.add_urls(&links, depth);
+                // Add the found links to the list of not visited links
+                state.lock().await.add_links(&links, depth);
             }
         }
 
@@ -123,15 +142,12 @@ pub async fn task(state: ThreadShared<SpiderState>, database: ThreadShared<Datab
     }
 }
 
-pub async fn fetch_html_document(url: &str) -> Option<String> {
+pub async fn fetch_document(url: &str) -> Option<String> {
     let mut response = surf::get(url).await.ok()?;
 
     if response.status() != 200 {
-        println!(
-            "Unable to fetch url: {}  Status code: {}",
-            url,
-            response.status()
-        );
+        let code = response.status();
+        println!("Unable to fetch url: {}  Status code: {}", url, code);
         return None;
     }
 

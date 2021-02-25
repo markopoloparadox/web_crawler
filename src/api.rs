@@ -3,21 +3,16 @@ use crate::State;
 use serde::{Deserialize, Serialize};
 use tide::{Body, Request, Response};
 
-#[derive(Deserialize, Serialize)]
-struct PostCrawlAnswer {
-    pub id: String,
-}
-
 pub async fn post_spider(mut req: Request<State>) -> tide::Result {
     let input: Input = req.body_json().await?;
     let hash = input.generate_hash();
 
     // Create successful response object
-    let body = PostCrawlAnswer { id: hash.clone() };
+    let body = Output { id: hash.clone() };
     let mut successful_response = Response::new(201);
     successful_response.set_body(Body::from_json(&body)?);
 
-    // Check if we have already crawled the requested domain
+    // If we have already crawled the requested domain return the id
     {
         let database = req.state().database.lock().await;
         if database.domain_links.contains_key(&hash) {
@@ -25,21 +20,19 @@ pub async fn post_spider(mut req: Request<State>) -> tide::Result {
         }
     }
 
+    // Prepare data for crawling
     let robots_txt = input.robots_txt.unwrap_or(false);
     let archive_pages = input.archive_pages.unwrap_or(false);
-
     let options = SpiderOptions::new(input.max_depth, input.max_pages, robots_txt, archive_pages);
     let database = req.state().database.clone();
-    let value = Spider::run(input.address, options, database).await;
 
-    let value = match value {
-        Some(x) => x,
-        None => return Ok("error".to_owned().into()),
-    };
+    // Crawl
+    let list = Spider::run(input.address, options, database).await;
 
+    // Save found list
     {
         let mut database = req.state().database.lock().await;
-        database.domain_links.insert(hash.clone(), value);
+        database.domain_links.insert(hash.clone(), list);
     }
 
     // Return
@@ -47,36 +40,50 @@ pub async fn post_spider(mut req: Request<State>) -> tide::Result {
 }
 
 pub async fn get_spider_list(req: Request<State>) -> tide::Result {
-    let database = req.state().database.lock().await;
-    let id = req.param("id")?;
-
-    if let Some(list) = database.domain_links.get(id) {
-        let mut res = Response::new(200);
-        res.set_body(Body::from_json(list)?);
-        return Ok(res);
+    // Retrieve id from request
+    let id = req.param("id");
+    if id.is_err() {
+        let mut response = Response::new(400);
+        response.set_body(Body::from_json(&"Missing id param".to_owned())?);
+        return Ok(response);
     }
+    let id = id.unwrap();
 
-    let mut res = Response::new(400);
-    res.set_body(Body::from_json(&"Unknown id".to_owned())?);
-    return Ok(res);
+    // Retrieve list
+    let database = req.state().database.lock().await;
+    let (status_code, body) = match database.domain_links.get(id) {
+        Some(x) => (200, Body::from_json(x)?),
+        None => (400, Body::from_json(&"Unknown id".to_owned())?),
+    };
+
+    let mut response = Response::new(status_code);
+    response.set_body(body);
+    Ok(response)
 }
 
 pub async fn get_spider_count(req: Request<State>) -> tide::Result {
-    let database = req.state().database.lock().await;
-    let id = req.param("id")?;
-
-    if let Some(list) = database.domain_links.get(id) {
-        let mut res = Response::new(200);
-        res.set_body(Body::from_json(&list.len())?);
-        return Ok(res);
+    // Retrieve id from request
+    let id = req.param("id");
+    if id.is_err() {
+        let mut response = Response::new(400);
+        response.set_body(Body::from_json(&"Missing id param".to_owned())?);
+        return Ok(response);
     }
+    let id = id.unwrap();
 
-    let mut res = Response::new(400);
-    res.set_body(Body::from_json(&"Unknown id".to_owned())?);
-    return Ok(res);
+    // Retrieve count
+    let database = req.state().database.lock().await;
+    let (status_code, body) = match database.domain_links.get(id) {
+        Some(x) => (200, Body::from_json(&x.len().to_string())?),
+        None => (400, Body::from_json(&"Unknown id".to_owned())?),
+    };
+
+    let mut response = Response::new(status_code);
+    response.set_body(body);
+    Ok(response)
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize)]
 struct Input {
     address: String,
     max_depth: Option<usize>,
@@ -90,4 +97,9 @@ impl Input {
         let hash = format!("{:?}{:?}{:?}", self.address, self.max_depth, self.max_pages);
         format!("{:x}", md5::compute(hash))
     }
+}
+
+#[derive(Deserialize, Serialize)]
+struct Output {
+    pub id: String,
 }

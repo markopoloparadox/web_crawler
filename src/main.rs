@@ -1,6 +1,7 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 
 mod api;
+mod common;
 mod spider;
 mod state;
 

@@ -1,4 +1,4 @@
-use crate::spider::ThreadShared;
+use crate::common::ThreadShared;
 use async_std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
