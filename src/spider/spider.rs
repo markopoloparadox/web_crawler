@@ -135,7 +135,7 @@ pub async fn fetch_html_document(url: &str) -> Option<String> {
         return None;
     }
 
-    let document = response.body_string().await.ok()?;
+    let document = response.body_string().await.unwrap();
     Some(document)
 }
 
@@ -167,24 +167,26 @@ pub fn normalize_url(base_url: &str, url: &str) -> Option<String> {
 }
 
 pub async fn save_to_file(base_url: &str, url: &str, contents: &str) -> Option<bool> {
-    let file_name: Vec<&str> = url.split(&base_url).collect();
-    let mut path: String = file_name[1].to_owned();
-    if path.starts_with('/') {
-        path = path[1..].to_owned();
-    }
+    let url = Url::parse(url).ok()?;
+    let subpath = match url.path() {
+        "/" => String::new(),
+        x => x.to_owned(),
+    };
 
-    let url = Url::parse(&base_url).unwrap();
-    let domain_name = url.domain().unwrap();
+    let url = Url::parse(base_url).ok()?;
+    let domain = url.domain()?;
 
-    async_std::fs::create_dir_all(format!("downloaded/{}/{}", domain_name, path))
-        .await
-        .ok()?;
-    async_std::fs::write(
-        format!("downloaded/{}/{}/index.html", domain_name, path),
-        contents,
-    )
-    .await
-    .ok()?;
+    let folder_path = format!("downloaded/{}/{}", domain, subpath);
+    async_std::fs::create_dir_all(folder_path).await.ok()?;
+
+    let future = if subpath.is_empty() {
+        let file_path = format!("downloaded/{}/index.html", domain);
+        async_std::fs::write(file_path, contents)
+    } else {
+        let file_path = format!("downloaded/{}/{}/index.html", domain, subpath);
+        async_std::fs::write(file_path, contents)
+    };
+    future.await.ok()?;
 
     Some(true)
 }
@@ -288,7 +290,7 @@ mod tests {
     fn test_scrap_links_case_zero_links_ok() {
         const SOURCE: &str = r#"
         <a></a>
-        <h1>You spelled it wrong.</h1>""#;
+        <h1>You spelled it wrong.</h1>"#;
 
         let base_url = "https://www.test.com";
         let html = Html::parse_document(SOURCE);
