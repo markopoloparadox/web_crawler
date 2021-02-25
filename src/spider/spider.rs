@@ -160,7 +160,7 @@ pub async fn fetch_document(url: &str) -> Option<String> {
         return None;
     }
 
-    let document = response.body_string().await.unwrap();
+    let document = response.body_string().await.ok()?;
     Some(document)
 }
 
