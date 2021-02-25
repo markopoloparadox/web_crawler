@@ -36,6 +36,11 @@ impl Spider {
         options: SpiderOptions,
         database: ThreadShared<Database>,
     ) -> Vec<String> {
+        // Check if the base_url is valid
+        if !is_url_valid(&base_url).await {
+            return vec![];
+        }
+
         // Create a task-shared state
         let state = SpiderState::new(base_url, options);
         let state = Arc::new(Mutex::new(state));
@@ -44,7 +49,7 @@ impl Spider {
 
         // TODO: Make the number of running tasks to be settable
         // by a Input parameter
-        for _i in 0..12 {
+        for _i in 0..50 {
             tasks.push(async_std::task::spawn(run_task(
                 state.clone(),
                 database.clone(),
@@ -60,6 +65,10 @@ impl Spider {
         let state = state.lock().await;
         state.visited.iter().map(|x| x.clone()).collect()
     }
+}
+
+pub async fn is_url_valid(url: &str) -> bool {
+    fetch_document(url).await.is_some()
 }
 
 pub async fn run_task(state: ThreadShared<SpiderState>, database: ThreadShared<Database>) {
@@ -354,6 +363,6 @@ mod tests {
         let database = Arc::new(Mutex::new(Database::new()));
 
         let links = async_std::task::block_on(Spider::run(base_url, options, database));
-        assert_eq!(links.len(), 1);
+        assert!(links.is_empty());
     }
 }

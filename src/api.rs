@@ -30,6 +30,15 @@ pub async fn post_spider(mut req: Request<State>) -> tide::Result {
     // Crawl
     let list = Spider::run(input.address, options, database).await;
 
+    // Something went wrong.
+    // TODO: Could have used Option<Vec<String>> instead of checking
+    // if the vector is empty.
+    if list.is_empty() {
+        let mut response = Response::new(400);
+        response.set_body(Body::from_json(&"Something went wrong...")?);
+        return Ok(response);
+    }
+
     // Save found list
     {
         let mut database = req.state().database.lock().await;

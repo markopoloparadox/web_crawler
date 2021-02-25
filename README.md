@@ -121,5 +121,5 @@ In order to keep this project simple and small, certain features were intentiona
 
 # TODO
 - Add more tests (and rename current ones)
-- Fix bugs (spider returning a single link for nonexisting domains)
+- Check if there is a chance for a deadlock inside Spider
 - Benchmark solution
